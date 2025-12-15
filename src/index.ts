@@ -61,7 +61,7 @@ import '@whiskeysockets/baileys';
 import makeWASocket, { DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys';
 import { pino } from 'pino';
 import { Boom } from '@hapi/boom';
-import * as qrcode from 'qrcode-terminal';
+import qrcode from 'qrcode-terminal';
 import { WhatsAppTracker } from './tracker.js';
 import * as readline from 'readline';
 
