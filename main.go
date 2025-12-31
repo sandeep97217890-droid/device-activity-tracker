@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	mrand "math/rand"
 	"os"
 	"os/signal"
 	"sort"
@@ -23,6 +24,22 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	waProto "go.mau.fi/whatsmeow/binary/proto"
+)
+
+// Configuration constants for tracker behavior
+const (
+	// MinProbeInterval is the minimum time between probes in milliseconds
+	MinProbeInterval = 2000
+	// MaxProbeRandomization is the maximum random delay added to probe interval in milliseconds
+	MaxProbeRandomization = 100
+	// StateHysteresisDelay is the minimum time before allowing state transitions (seconds)
+	StateHysteresisDelay = 6
+	// MinMeasurementsForState is the minimum number of measurements required for stable state
+	MinMeasurementsForState = 3
+	// MinGlobalHistoryForCalibration is the minimum global measurements before leaving calibration
+	MinGlobalHistoryForCalibration = 5
+	// ProbeTimeoutSeconds is the timeout for marking device as OFFLINE
+	ProbeTimeoutSeconds = 10
 )
 
 // DeviceMetrics tracks RTT measurements and device state
@@ -44,6 +61,7 @@ type WhatsAppTracker struct {
 	globalRTTHistory    []int64
 	probeStartTimes     map[string]time.Time
 	stopChan            chan struct{}
+	rng                 *mrand.Rand // Random number generator for probes
 }
 
 func main() {
@@ -167,6 +185,7 @@ func NewWhatsAppTracker(client *whatsmeow.Client, targetJID types.JID) *WhatsApp
 		globalRTTHistory: make([]int64, 0),
 		probeStartTimes:  make(map[string]time.Time),
 		stopChan:         make(chan struct{}),
+		rng:              mrand.New(mrand.NewSource(time.Now().UnixNano())),
 	}
 }
 
@@ -204,8 +223,9 @@ func (t *WhatsAppTracker) probeLoop() {
 			return
 		default:
 			t.sendDeleteProbe()
-			// Add randomization to probe interval (2000-2100ms) to avoid detection patterns
-			delay := time.Duration(2000+time.Now().UnixNano()%100) * time.Millisecond
+			// Add randomization to probe interval to avoid detection patterns
+			randomDelay := t.rng.Intn(MaxProbeRandomization)
+			delay := time.Duration(MinProbeInterval+randomDelay) * time.Millisecond
 			time.Sleep(delay)
 		}
 	}
@@ -216,7 +236,7 @@ func (t *WhatsAppTracker) sendDeleteProbe() {
 	// Generate a random message ID that doesn't exist
 	// Use multiple prefixes for variety
 	prefixes := []string{"3EB0", "BAE5", "F1D2", "A9C4", "7E8B", "C3F9", "2D6A"}
-	randomPrefix := prefixes[time.Now().UnixNano()%int64(len(prefixes))]
+	randomPrefix := prefixes[t.rng.Intn(len(prefixes))]
 	fakeMessageID := fmt.Sprintf("%s%s%d", randomPrefix, generateRandomString(8), time.Now().UnixNano()%1000000)
 
 	// Create delete message
@@ -245,11 +265,11 @@ func (t *WhatsAppTracker) sendDeleteProbe() {
 		
 		// Set timeout for offline detection
 		go func(msgID string) {
-			time.Sleep(10 * time.Second)
+			time.Sleep(ProbeTimeoutSeconds * time.Second)
 			if _, exists := t.probeStartTimes[msgID]; exists {
 				// No receipt received - mark as offline
 				delete(t.probeStartTimes, msgID)
-				t.markDeviceOffline(t.targetJID.String(), 10000)
+				t.markDeviceOffline(t.targetJID.String(), ProbeTimeoutSeconds*1000)
 			}
 		}(resp.ID)
 	}
@@ -340,7 +360,7 @@ func (t *WhatsAppTracker) determineDeviceState(jid string) {
 	}
 
 	// Calculate moving average - need at least 3 measurements for stable state determination
-	if len(metrics.RecentRTTs) < 3 {
+	if len(metrics.RecentRTTs) < MinMeasurementsForState {
 		// Not enough data yet, keep current state or set to calibrating
 		if metrics.State == "" || metrics.State == "OFFLINE" {
 			metrics.State = "Calibrating..."
@@ -355,7 +375,7 @@ func (t *WhatsAppTracker) determineDeviceState(jid string) {
 	movingAvg := float64(sum) / float64(len(metrics.RecentRTTs))
 
 	// Calculate global median and threshold
-	if len(t.globalRTTHistory) < 5 {
+	if len(t.globalRTTHistory) < MinGlobalHistoryForCalibration {
 		metrics.State = "Calibrating..."
 		return
 	}
@@ -379,9 +399,9 @@ func (t *WhatsAppTracker) determineDeviceState(jid string) {
 	timeSinceLastChange := time.Since(metrics.StateChangeTime)
 	
 	if newState != previousState && previousState != "Calibrating..." && previousState != "OFFLINE" {
-		// State wants to change - only allow if we've been in current state for at least 6 seconds
+		// State wants to change - only allow if we've been in current state for at least StateHysteresisDelay seconds
 		// This gives time for the moving average to stabilize
-		if timeSinceLastChange < 6*time.Second {
+		if timeSinceLastChange < StateHysteresisDelay*time.Second {
 			// Too soon to change, keep previous state
 			return
 		}
