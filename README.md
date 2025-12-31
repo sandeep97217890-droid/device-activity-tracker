@@ -1,14 +1,14 @@
-<h1 align="center">Device Activity Tracker</h1>
-<p align="center">WhatsApp & Signal Activity Tracker via RTT Analysis</p>
+# Device Activity Tracker
+
+<p align="center">WhatsApp Activity Tracker via RTT Analysis - Pure Go Implementation</p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Node.js-20+-339933?style=flat&logo=node.js&logoColor=white" alt="Node.js"/>
-  <img src="https://img.shields.io/badge/TypeScript-5.0+-3178C6?style=flat&logo=typescript&logoColor=white" alt="TypeScript"/>
-  <img src="https://img.shields.io/badge/React-18+-61DAFB?style=flat&logo=react&logoColor=black" alt="React"/>
+  <img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go"/>
+  <img src="https://img.shields.io/badge/WhatsApp-whatsmeow-25D366?style=flat&logo=whatsapp&logoColor=white" alt="WhatsApp"/>
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License MIT"/>
 </p>
 
-> ⚠️ **DISCLAIMER**: Proof-of-concept for educational and security research purposes only. Demonstrates privacy vulnerabilities in WhatsApp and Signal.
+> ⚠️ **DISCLAIMER**: Proof-of-concept for educational and security research purposes only. Demonstrates privacy vulnerabilities in WhatsApp.
 
 ## Overview
 
@@ -26,43 +26,35 @@ This project implements the research from the paper **"Careless Whisper: Exploit
 
 ![WhatsApp Activity Tracker Interface](example.png)
 
-The web interface shows real-time RTT measurements, device state detection, and activity patterns.
+## Requirements
+
+- **Go 1.21** or higher
+- WhatsApp account
+- Terminal (command-line interface)
 
 ## Installation
 
 ```bash
 # Clone repository
-git clone https://github.com/gommzystudio/device-activity-tracker.git
+git clone https://github.com/sandeep97217890-droid/device-activity-tracker.git
 cd device-activity-tracker
 
-# Install dependencies
-npm install
-cd client && npm install && cd ..
+# Build the application
+go build -o tracker main.go
 ```
-
-**Requirements:** Node.js 20+, npm, WhatsApp account
 
 ## Usage
 
-### Web Interface (Recommended)
-
 ```bash
-# Terminal 1: Start backend
-npm run start:server
-
-# Terminal 2: Start frontend
-npm run start:client
+# Run the tracker
+./tracker
 ```
 
-Open `http://localhost:3000`, scan QR code with WhatsApp, then enter phone number to track (e.g., `491701234567`).
-
-### CLI Interface (only WhatsApp)
-
-```bash
-npm start
-```
-
-Follow prompts to authenticate and enter target number.
+**Steps:**
+1. The application will display a QR code in your terminal
+2. Scan the QR code with WhatsApp (Linked Devices)
+3. Once connected, enter the target phone number (with country code, e.g., `14155551234`)
+4. The tracker will start monitoring device activity in real-time
 
 **Example Output:**
 
@@ -70,7 +62,7 @@ Follow prompts to authenticate and enter target number.
 ╔════════════════════════════════════════════════════════════════╗
 ║ 🟡 Device Status Update - 09:41:51                             ║
 ╠════════════════════════════════════════════════════════════════╣
-║ JID:        ***********@lid                                    ║
+║ JID:        14155551234@s.whatsapp.net                         ║
 ║ Status:     Standby                                            ║
 ║ RTT:        1104ms                                             ║
 ║ Avg (3):    1161ms                                             ║
@@ -79,59 +71,59 @@ Follow prompts to authenticate and enter target number.
 ╚════════════════════════════════════════════════════════════════╝
 ```
 
+**Status Indicators:**
 - **🟢 Online**: Device is actively being used (RTT below threshold)
 - **🟡 Standby**: Device is idle/locked (RTT above threshold)
-- **🔴 Offline**: Device is offline or unreachable (no CLIENT ACK received)
+- **🔴 OFFLINE**: Device is offline or unreachable (no CLIENT ACK received)
 
 ## How It Works
 
-The tracker sends probe messages and measures the Round-Trip Time (RTT) to detect device activity. Two probe methods are available:
+The tracker sends probe messages and measures the Round-Trip Time (RTT) to detect device activity.
 
-### Probe Methods
+### Probe Method
 
-| Method | Description                                                                                                     |
-|--------|-----------------------------------------------------------------------------------------------------------------|
-| **Delete** (Default) | Sends a "delete" request for a non-existent message ID.                                                         |
-| **Reaction** | Sends a reaction emoji to a non-existent message ID. |
+The tool uses a **silent delete probe** method:
+- Sends a "delete" request for a non-existent message ID
+- Completely covert - no notification or visible trace
+- Measures time until delivery receipt is received
 
 ### Detection Logic
 
-The time between sending the probe message and receiving the CLIENT ACK (Status 3) is measured as RTT. Device state is detected using a dynamic threshold calculated as 90% of the median RTT: values below the threshold indicate active usage, values above indicate standby mode. Measurements are stored in a history and the median is continuously updated to adapt to different network conditions.
-
-### Switching Probe Methods
-
-In the web interface, you can switch between probe methods using the dropdown in the control panel. In CLI mode, the delete method is used by default.
+The time between sending the probe message and receiving the CLIENT ACK is measured as RTT. Device state is detected using a dynamic threshold calculated as 90% of the median RTT: values below the threshold indicate active usage, values above indicate standby mode. Measurements are stored in a history and the median is continuously updated to adapt to different network conditions.
 
 ## Common Issues
 
-- **Not Connecting to WhatsApp**: Delete the `auth_info_baileys/` folder and re-scan the QR code.
+- **Not Connecting to WhatsApp**: Delete the `whatsapp.db` file and re-scan the QR code.
+- **Build Errors**: Ensure you have Go 1.21 or higher installed: `go version`
 
 ## Project Structure
 
 ```
 device-activity-tracker/
-├── src/
-│   ├── tracker.ts         # WhatsApp RTT analysis logic
-│   ├── signal-tracker.ts  # Signal RTT analysis logic
-│   ├── server.ts          # Backend API server (both platforms)
-│   └── index.ts           # CLI interface
-├── client/                # React web interface
-└── package.json
+├── main.go            # Main application with WhatsApp RTT analysis logic
+├── go.mod             # Go module dependencies
+├── go.sum             # Dependency checksums
+└── README.md          # This file
 ```
+
+## Technology Stack
+
+- **Language**: Go (Golang)
+- **WhatsApp Library**: [whatsmeow](https://github.com/tulir/whatsmeow) - Pure Go WhatsApp Web API
+- **Database**: SQLite (for session storage)
+- **QR Code**: Terminal-based QR code display
 
 ## How to Protect Yourself
 
-The most effective mitigation is to enable “Block unknown account messages” in WhatsApp under
-Settings → Privacy → Advanced.
+The most effective mitigation is to enable "Block unknown account messages" in WhatsApp under Settings → Privacy → Advanced.
 
-This setting may reduce an attacker’s ability to spam probe reactions from unknown numbers, because WhatsApp blocks high-volume messages from unknown accounts.
-However, WhatsApp does not disclose what “high volume” means, so this does not fully prevent an attacker from sending a significant number of probe reactions before rate-limiting kicks in.
+This setting may reduce an attacker's ability to spam probe reactions from unknown numbers, because WhatsApp blocks high-volume messages from unknown accounts. However, WhatsApp does not disclose what "high volume" means, so this does not fully prevent an attacker from sending a significant number of probe reactions before rate-limiting kicks in.
 
-Disabling read receipts helps with regular messages but does not protect against this specific attack. As of December 2025, this vulnerability remains exploitable in WhatsApp and Signal.
+Disabling read receipts helps with regular messages but does not protect against this specific attack. As of December 2025, this vulnerability remains exploitable in WhatsApp.
 
 ## Ethical & Legal Considerations
 
-⚠️ For research and educational purposes only. Never track people without explicit consent - this may violate privacy laws. Authentication data (`auth_info_baileys/`) is stored locally and must never be committed to version control.
+⚠️ For research and educational purposes only. Never track people without explicit consent - this may violate privacy laws. Authentication data (`whatsapp.db`) is stored locally and must never be committed to version control.
 
 ## Citation
 
@@ -150,9 +142,8 @@ Based on research by Gegenhuber et al., University of Vienna & SBA Research:
 
 MIT License - See LICENSE file.
 
-Built with [@whiskeysockets/baileys](https://github.com/WhiskeySockets/Baileys)
+Built with [whatsmeow](https://github.com/tulir/whatsmeow) - Pure Go WhatsApp Web API
 
 ---
 
 **Use responsibly. This tool demonstrates real security vulnerabilities that affect millions of users.**
-
