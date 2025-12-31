@@ -3,14 +3,17 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
 
 	_ "github.com/mattn/go-colorable"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store/sqlstore"
@@ -401,18 +404,12 @@ func calculateMedian(data []int64) int64 {
 		return 0
 	}
 
-	// Copy and sort
+	// Copy and sort using built-in sort
 	sorted := make([]int64, len(data))
 	copy(sorted, data)
-	
-	// Simple bubble sort for median calculation
-	for i := 0; i < len(sorted); i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[i] > sorted[j] {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i] < sorted[j]
+	})
 
 	mid := len(sorted) / 2
 	if len(sorted)%2 == 0 {
@@ -425,9 +422,20 @@ func calculateMedian(data []int64) int64 {
 func generateRandomString(length int) string {
 	const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	result := make([]byte, length)
+	randomBytes := make([]byte, length)
+	
+	// Use crypto/rand for secure randomness
+	_, err := rand.Read(randomBytes)
+	if err != nil {
+		// Fallback to timestamp-based if crypto/rand fails
+		for i := range result {
+			result[i] = chars[time.Now().UnixNano()%int64(len(chars))]
+		}
+		return string(result)
+	}
+	
 	for i := range result {
-		result[i] = chars[time.Now().UnixNano()%int64(len(chars))]
-		time.Sleep(1 * time.Nanosecond) // Ensure different values
+		result[i] = chars[int(randomBytes[i])%len(chars)]
 	}
 	return string(result)
 }

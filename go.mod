@@ -6,6 +6,7 @@ toolchain go1.24.11
 
 require (
 	github.com/mattn/go-colorable v0.1.14
+	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/mdp/qrterminal/v3 v3.2.0
 	go.mau.fi/whatsmeow v0.0.0-20251217143725-11cf47c62d32
 	google.golang.org/protobuf v1.36.11
