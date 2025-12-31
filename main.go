@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	mrand "math/rand"
 	"os"
 	"os/signal"
 	"sort"
@@ -25,13 +26,30 @@ import (
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 )
 
+// Configuration constants for tracker behavior
+const (
+	// MinProbeInterval is the minimum time between probes in milliseconds
+	MinProbeInterval = 2000
+	// MaxProbeRandomization is the maximum random delay added to probe interval in milliseconds
+	MaxProbeRandomization = 100
+	// StateHysteresisDelay is the minimum time before allowing state transitions (seconds)
+	StateHysteresisDelay = 6
+	// MinMeasurementsForState is the minimum number of measurements required for stable state
+	MinMeasurementsForState = 3
+	// MinGlobalHistoryForCalibration is the minimum global measurements before leaving calibration
+	MinGlobalHistoryForCalibration = 5
+	// ProbeTimeoutSeconds is the timeout for marking device as OFFLINE
+	ProbeTimeoutSeconds = 10
+)
+
 // DeviceMetrics tracks RTT measurements and device state
 type DeviceMetrics struct {
-	RTTHistory  []int64
-	RecentRTTs  []int64
-	State       string
-	LastRTT     int64
-	LastUpdate  time.Time
+	RTTHistory      []int64
+	RecentRTTs      []int64
+	State           string
+	LastRTT         int64
+	LastUpdate      time.Time
+	StateChangeTime time.Time // Track when state last changed for hysteresis
 }
 
 // WhatsAppTracker monitors user activity using RTT-based analysis
@@ -43,6 +61,7 @@ type WhatsAppTracker struct {
 	globalRTTHistory    []int64
 	probeStartTimes     map[string]time.Time
 	stopChan            chan struct{}
+	rng                 *mrand.Rand // Random number generator for probes
 }
 
 func main() {
@@ -166,6 +185,7 @@ func NewWhatsAppTracker(client *whatsmeow.Client, targetJID types.JID) *WhatsApp
 		globalRTTHistory: make([]int64, 0),
 		probeStartTimes:  make(map[string]time.Time),
 		stopChan:         make(chan struct{}),
+		rng:              mrand.New(mrand.NewSource(time.Now().UnixNano())),
 	}
 }
 
@@ -197,15 +217,16 @@ func (t *WhatsAppTracker) StopTracking() {
 
 // probeLoop sends periodic probe messages
 func (t *WhatsAppTracker) probeLoop() {
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
 	for {
 		select {
 		case <-t.stopChan:
 			return
-		case <-ticker.C:
+		default:
 			t.sendDeleteProbe()
+			// Add randomization to probe interval to avoid detection patterns
+			randomDelay := t.rng.Intn(MaxProbeRandomization)
+			delay := time.Duration(MinProbeInterval+randomDelay) * time.Millisecond
+			time.Sleep(delay)
 		}
 	}
 }
@@ -213,7 +234,10 @@ func (t *WhatsAppTracker) probeLoop() {
 // sendDeleteProbe sends a silent delete probe message
 func (t *WhatsAppTracker) sendDeleteProbe() {
 	// Generate a random message ID that doesn't exist
-	fakeMessageID := fmt.Sprintf("3EB0%s%d", generateRandomString(8), time.Now().UnixNano()%1000000)
+	// Use multiple prefixes for variety
+	prefixes := []string{"3EB0", "BAE5", "F1D2", "A9C4", "7E8B", "C3F9", "2D6A"}
+	randomPrefix := prefixes[t.rng.Intn(len(prefixes))]
+	fakeMessageID := fmt.Sprintf("%s%s%d", randomPrefix, generateRandomString(8), time.Now().UnixNano()%1000000)
 
 	// Create delete message
 	deleteMsg := &waProto.Message{
@@ -227,6 +251,7 @@ func (t *WhatsAppTracker) sendDeleteProbe() {
 		},
 	}
 
+	// Record start time BEFORE sending the message - this is critical for accurate RTT
 	startTime := time.Now()
 	resp, err := t.client.SendMessage(context.Background(), t.targetJID, deleteMsg)
 	if err != nil {
@@ -240,11 +265,11 @@ func (t *WhatsAppTracker) sendDeleteProbe() {
 		
 		// Set timeout for offline detection
 		go func(msgID string) {
-			time.Sleep(10 * time.Second)
+			time.Sleep(ProbeTimeoutSeconds * time.Second)
 			if _, exists := t.probeStartTimes[msgID]; exists {
 				// No receipt received - mark as offline
 				delete(t.probeStartTimes, msgID)
-				t.markDeviceOffline(t.targetJID.String(), 10000)
+				t.markDeviceOffline(t.targetJID.String(), ProbeTimeoutSeconds*1000)
 			}
 		}(resp.ID)
 	}
@@ -278,11 +303,12 @@ func (t *WhatsAppTracker) addMeasurement(jid string, rtt int64) {
 	// Initialize metrics if needed
 	if t.deviceMetrics[jid] == nil {
 		t.deviceMetrics[jid] = &DeviceMetrics{
-			RTTHistory: make([]int64, 0),
-			RecentRTTs: make([]int64, 0),
-			State:      "Calibrating...",
-			LastRTT:    rtt,
-			LastUpdate: time.Now(),
+			RTTHistory:      make([]int64, 0),
+			RecentRTTs:      make([]int64, 0),
+			State:           "Calibrating...",
+			LastRTT:         rtt,
+			LastUpdate:      time.Now(),
+			StateChangeTime: time.Now(),
 		}
 	}
 
@@ -322,8 +348,23 @@ func (t *WhatsAppTracker) determineDeviceState(jid string) {
 		return
 	}
 
-	// Calculate moving average
-	if len(metrics.RecentRTTs) == 0 {
+	// If device is marked as OFFLINE, only change state if we have valid new measurements
+	// This prevents flickering when device comes back online
+	if metrics.State == "OFFLINE" {
+		if metrics.LastRTT <= 5000 && len(metrics.RecentRTTs) > 0 {
+			// Device came back online - allow state recalculation below
+		} else {
+			// Keep OFFLINE state
+			return
+		}
+	}
+
+	// Calculate moving average - need at least 3 measurements for stable state determination
+	if len(metrics.RecentRTTs) < MinMeasurementsForState {
+		// Not enough data yet, keep current state or set to calibrating
+		if metrics.State == "" || metrics.State == "OFFLINE" {
+			metrics.State = "Calibrating..."
+		}
 		return
 	}
 
@@ -334,7 +375,7 @@ func (t *WhatsAppTracker) determineDeviceState(jid string) {
 	movingAvg := float64(sum) / float64(len(metrics.RecentRTTs))
 
 	// Calculate global median and threshold
-	if len(t.globalRTTHistory) < 3 {
+	if len(t.globalRTTHistory) < MinGlobalHistoryForCalibration {
 		metrics.State = "Calibrating..."
 		return
 	}
@@ -342,34 +383,61 @@ func (t *WhatsAppTracker) determineDeviceState(jid string) {
 	median := calculateMedian(t.globalRTTHistory)
 	threshold := float64(median) * 0.9
 
+	// Store previous state to detect changes
+	previousState := metrics.State
+
+	// Determine new state based on threshold
+	var newState string
 	if movingAvg < threshold {
-		metrics.State = "Online"
+		newState = "Online"
 	} else {
-		metrics.State = "Standby"
+		newState = "Standby"
 	}
 
-	// Display formatted output
-	displayDeviceState(jid, metrics.LastRTT, int64(movingAvg), median, int64(threshold), metrics.State)
+	// Apply hysteresis: require state to be consistent for a brief period before changing
+	// This prevents rapid oscillation between Online and Standby states
+	timeSinceLastChange := time.Since(metrics.StateChangeTime)
+	
+	if newState != previousState && previousState != "Calibrating..." && previousState != "OFFLINE" {
+		// State wants to change - only allow if we've been in current state for at least StateHysteresisDelay seconds
+		// This gives time for the moving average to stabilize
+		if timeSinceLastChange < StateHysteresisDelay*time.Second {
+			// Too soon to change, keep previous state
+			return
+		}
+	}
+
+	// Update state if it changed
+	if newState != previousState {
+		metrics.State = newState
+		metrics.StateChangeTime = time.Now()
+		// Display output when state changes
+		displayDeviceState(jid, metrics.LastRTT, int64(movingAvg), median, int64(threshold), metrics.State)
+	}
 }
 
 // markDeviceOffline marks a device as offline
 func (t *WhatsAppTracker) markDeviceOffline(jid string, timeout int64) {
 	if t.deviceMetrics[jid] == nil {
 		t.deviceMetrics[jid] = &DeviceMetrics{
-			RTTHistory: make([]int64, 0),
-			RecentRTTs: make([]int64, 0),
-			State:      "OFFLINE",
-			LastRTT:    timeout,
-			LastUpdate: time.Now(),
+			RTTHistory:      make([]int64, 0),
+			RecentRTTs:      make([]int64, 0),
+			State:           "OFFLINE",
+			LastRTT:         timeout,
+			LastUpdate:      time.Now(),
+			StateChangeTime: time.Now(),
 		}
 	} else {
 		metrics := t.deviceMetrics[jid]
-		metrics.State = "OFFLINE"
-		metrics.LastRTT = timeout
-		metrics.LastUpdate = time.Now()
+		// Only mark as OFFLINE if not already OFFLINE to avoid spam
+		if metrics.State != "OFFLINE" {
+			metrics.State = "OFFLINE"
+			metrics.LastRTT = timeout
+			metrics.LastUpdate = time.Now()
+			metrics.StateChangeTime = time.Now()
+			fmt.Printf("\n🔴 Device %s marked as OFFLINE (no receipt after %dms)\n\n", jid, timeout)
+		}
 	}
-
-	fmt.Printf("\n🔴 Device %s marked as OFFLINE (no receipt after %dms)\n\n", jid, timeout)
 }
 
 // displayDeviceState prints formatted device state
@@ -395,7 +463,8 @@ func displayDeviceState(jid string, rtt, avgRtt, median, threshold int64, state 
 	fmt.Printf("║ Avg (3):    %-50s ║\n", fmt.Sprintf("%dms", avgRtt))
 	fmt.Printf("║ Median:     %-50s ║\n", fmt.Sprintf("%dms", median))
 	fmt.Printf("║ Threshold:  %-50s ║\n", fmt.Sprintf("%dms", threshold))
-	fmt.Println("╚════════════════════════════════════════════════════════════════╝\n")
+	fmt.Println("╚════════════════════════════════════════════════════════════════╝")
+	fmt.Println()
 }
 
 // calculateMedian calculates the median of a slice of int64

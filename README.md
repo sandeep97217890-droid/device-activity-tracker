@@ -89,7 +89,31 @@ The tool uses a **silent delete probe** method:
 
 ### Detection Logic
 
-The time between sending the probe message and receiving the CLIENT ACK is measured as RTT. Device state is detected using a dynamic threshold calculated as 90% of the median RTT: values below the threshold indicate active usage, values above indicate standby mode. Measurements are stored in a history and the median is continuously updated to adapt to different network conditions.
+The tracker implements a sophisticated state detection algorithm with the following features:
+
+**RTT Measurement:**
+- Start time is recorded BEFORE sending the probe message for accurate RTT calculation
+- Multiple message ID prefixes are used to avoid detection patterns
+- Probe intervals are randomized (2000-2100ms) to appear more natural
+
+**State Determination:**
+- Uses a moving average of the last 3 RTT measurements
+- Calculates a dynamic threshold at 90% of the global median RTT
+- Values below threshold indicate active usage ("Online")
+- Values above threshold indicate standby mode ("Standby")
+- No response within 10 seconds marks device as "OFFLINE"
+
+**State Stability (Hysteresis):**
+- Requires at least 3 measurements before determining Online/Standby state
+- Requires at least 5 global measurements before leaving "Calibrating..." state
+- Implements 6-second hysteresis before state transitions
+- Prevents rapid oscillation between states
+- Only displays updates when state actually changes, reducing console noise
+
+**State Transitions:**
+- OFFLINE → Online/Standby: Only when valid measurements received
+- Online ↔ Standby: Only after 6 seconds in current state
+- Prevents flickering and ensures stable status reporting
 
 ## Common Issues
 
