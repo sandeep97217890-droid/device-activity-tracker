@@ -11,6 +11,21 @@ client/build/
 auth_info_baileys/
 auth_info_multi/
 .wwebjs_auth/
+whatsapp.db
+whatsapp.db-shm
+whatsapp.db-wal
+
+# Go binaries
+tracker
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test coverage
+*.out
+*.test
 
 # Environment variables
 .env
